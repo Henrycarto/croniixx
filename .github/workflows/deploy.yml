@@ -1,0 +1,142 @@
+name: Deploy
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+# Two deploys running at once would race on the ECS service update and leave
+# the cluster on whichever revision finished last rather than the newer one.
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-central-1
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+
+jobs:
+  verify:
+    name: Verify before shipping
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    name: Push ${{ matrix.service }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [sync, engine, reminder-api]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC rather than long lived keys. A static access key in repository
+      # secrets is a credential that outlives every person who set it up.
+      - name: Assume deployment role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          # The private coefficient packages are installed at image build time
+          # from a private index. Without this the image starts in reference
+          # mode and says so on every response.
+          build-args: |
+            CRONIIXX_PRIVATE_INDEX=${{ secrets.CRONIIXX_PRIVATE_INDEX }}
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/croniixx-${{ matrix.service }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/croniixx-${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  migrate:
+    name: Database migration
+    needs: images
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assume deployment role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Migrations run as a one off task before the services roll, so a new
+      # revision never starts against a schema it does not know about.
+      - name: Run migration task
+        run: |
+          aws ecs run-task \
+            --cluster croniixx-${{ github.event.inputs.environment || 'production' }} \
+            --task-definition croniixx-migrate \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.PRIVATE_SUBNET_IDS }}],securityGroups=[${{ secrets.SERVICE_SECURITY_GROUP }}],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' --output text > task_arn.txt
+          aws ecs wait tasks-stopped \
+            --cluster croniixx-${{ github.event.inputs.environment || 'production' }} \
+            --tasks "$(cat task_arn.txt)"
+
+  services:
+    name: Roll ${{ matrix.service }}
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    strategy:
+      fail-fast: false
+      # The reminder dispatcher must come up before the engine starts pushing
+      # schedules at it, so services roll one at a time in this order.
+      max-parallel: 1
+      matrix:
+        service: [reminder-api, sync, engine]
+
+    steps:
+      - name: Assume deployment role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new deployment
+        run: |
+          aws ecs update-service \
+            --cluster croniixx-${{ github.event.inputs.environment || 'production' }} \
+            --service croniixx-${{ matrix.service }} \
+            --force-new-deployment
+
+      - name: Wait for the service to stabilise
+        run: |
+          aws ecs wait services-stable \
+            --cluster croniixx-${{ github.event.inputs.environment || 'production' }} \
+            --services croniixx-${{ matrix.service }}
+
+      - name: Confirm the engine mode after rollout
+        if: matrix.service == 'engine'
+        run: |
+          echo "Check /health on the engine and confirm coefficient_source is"
+          echo "private_validated before treating this deployment as clinical."
