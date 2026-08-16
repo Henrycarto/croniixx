@@ -1,0 +1,127 @@
+name: croniixx
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: croniixx-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-croniixx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-croniixx_local}
+      POSTGRES_DB: ${POSTGRES_DB:-croniixx}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-croniixx} -d ${POSTGRES_DB:-croniixx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: croniixx-redis
+    # appendonly keeps the reminder queue across restarts. A dropped queue means
+    # missed doses, which is the one failure mode this system cannot have.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  sync:
+    build:
+      context: ../services/sync
+      dockerfile: Dockerfile
+    container_name: croniixx-sync
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://croniixx:croniixx_local@postgres:5432/croniixx}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TERRA_DEV_ID: ${TERRA_DEV_ID:-}
+      TERRA_API_KEY: ${TERRA_API_KEY:-}
+      TERRA_SIGNING_SECRET: ${TERRA_SIGNING_SECRET:-}
+      TERRA_BASE_URL: ${TERRA_BASE_URL:-https://api.tryterra.co/v2}
+      ENGINE_SERVICE_URL: ${ENGINE_SERVICE_URL:-http://engine:8002}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../services/sync:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+
+  engine:
+    build:
+      context: ../services/engine
+      dockerfile: Dockerfile
+    container_name: croniixx-engine
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://croniixx:croniixx_local@postgres:5432/croniixx}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REMINDER_SERVICE_URL: ${REMINDER_SERVICE_URL:-http://reminder-api:8003}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../services/engine:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+
+  reminder-api:
+    build:
+      context: ../services/reminder-api
+      dockerfile: Dockerfile
+    container_name: croniixx-reminder-api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://croniixx:croniixx_local@postgres:5432/croniixx}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+      JWT_SECRET: ${JWT_SECRET:-change_me_in_every_environment}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8003:8003"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../services/reminder-api:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+
+  web:
+    image: node:22-alpine
+    container_name: croniixx-web
+    working_dir: /workspace
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_SYNC_URL: ${NEXT_PUBLIC_SYNC_URL:-http://localhost:8001}
+      NEXT_PUBLIC_ENGINE_URL: ${NEXT_PUBLIC_ENGINE_URL:-http://localhost:8002}
+      NEXT_PUBLIC_REMINDER_URL: ${NEXT_PUBLIC_REMINDER_URL:-http://localhost:8003}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../:/workspace
+      - web_node_modules:/workspace/node_modules
+    command: ["sh", "-c", "npm install && npm run dev --workspace @croniixx/web -- --hostname 0.0.0.0"]
+    depends_on:
+      - sync
+      - engine
+      - reminder-api
+
+volumes:
+  postgres_data:
+  redis_data:
+  web_node_modules:

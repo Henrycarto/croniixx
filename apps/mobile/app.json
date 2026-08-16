@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Croniixx",
+    "slug": "croniixx",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "croniixx",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#080B14",
+    "splash": {
+      "backgroundColor": "#080B14",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.croniixx.patient",
+      "infoPlist": {
+        "UIBackgroundModes": ["remote-notification"]
+      }
+    },
+    "android": {
+      "package": "com.croniixx.patient",
+      "adaptiveIcon": {
+        "backgroundColor": "#080B14"
+      },
+      "permissions": ["POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM"]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "color": "#7C3AED"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "reminderApiUrl": "http://localhost:8003",
+      "engineApiUrl": "http://localhost:8002"
+    }
+  }
+}

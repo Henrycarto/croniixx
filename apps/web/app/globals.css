@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    background-color: #080b14;
+    color: #e6eaf4;
+  }
+
+  body {
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Every number in this interface is a measurement. Tabular figures keep
+     columns of timestamps and offsets aligned so a clinician can scan them
+     vertically instead of reading each one. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  ::selection {
+    background-color: #7c3aed;
+    color: #ffffff;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #080b14;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #1e2942;
+    border: 2px solid #080b14;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a3b5c;
+  }
+}
+
+@layer components {
+  /* Panels are bordered planes, not floating cards. No shadow, no radius
+     beyond a hairline, so the layout reads as an instrument face divided into
+     regions rather than as objects hovering over a page. */
+  .panel {
+    @apply border border-line bg-surface;
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between border-b border-line px-4 py-2.5;
+  }
+
+  .label {
+    @apply font-mono text-micro uppercase tracking-label text-ink-faint;
+  }
+
+  .value {
+    @apply num font-mono text-ink;
+  }
+
+  /* Square edged action surfaces. A pill button would read as consumer
+     software; this is a control on a clinical tool. */
+  .action {
+    @apply border border-line-strong bg-surface-raised px-4 py-2 font-mono text-micro
+      uppercase tracking-label text-ink transition-colors
+      hover:border-circadian hover:text-circadian
+      focus:outline-none focus-visible:ring-1 focus-visible:ring-circadian
+      disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .action-primary {
+    @apply border border-circadian bg-circadian/10 px-4 py-2 font-mono text-micro
+      uppercase tracking-label text-circadian transition-colors
+      hover:bg-circadian/20
+      focus:outline-none focus-visible:ring-1 focus-visible:ring-circadian;
+  }
+
+  .field {
+    @apply w-full border border-line bg-base px-3 py-2 font-mono text-sm text-ink
+      placeholder:text-ink-faint focus:border-circadian focus:outline-none;
+  }
+
+  .rule {
+    @apply h-px w-full bg-line;
+  }
+}
